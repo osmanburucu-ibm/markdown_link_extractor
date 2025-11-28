@@ -1,0 +1,2 @@
+"""Markdown Link Extractor package."""
+from .extractor import extract_links_from_folder
