@@ -56,3 +56,21 @@ def test_format_links_as_json(tmp_path):
     data = json.loads(json_out)
     assert "sample" in data
     assert isinstance(data["sample"]["links"], list)
+
+def test_extract_bare_and_inline_urls(tmp_path):
+    md_content = """
+    [Python Docs](https://docs.python.org)
+    <https://pypi.org>
+    https://bareurl.com
+    [Attachment](https://files.com/@attachment/doc.pdf)
+    """
+    md_file = tmp_path / "urls.md"
+    md_file.write_text(md_content, encoding="utf-8")
+
+    links = extractor.extract_links_from_file(md_file)
+    urls = [l["url"] for l in links]
+    assert "https://docs.python.org" in urls
+    assert "https://pypi.org" in urls
+    assert "https://bareurl.com" in urls
+    assert all((u is None) or ("@attachment" not in u) for u in urls)
+    assert len(links) == 3
