@@ -74,3 +74,55 @@ def test_extract_bare_and_inline_urls(tmp_path):
     assert "https://bareurl.com" in urls
     assert all((u is None) or ("@attachment" not in u) for u in urls)
     assert len(links) == 3
+
+
+def test_extract_reference_links(tmp_path):
+    md_content = """
+    [Python Docs][ref]
+
+    [ref]: https://docs.python.org "Official Docs"
+    """
+    md_file = tmp_path / "ref.md"
+    md_file.write_text(md_content, encoding="utf-8")
+
+    links = extractor.extract_links_from_file(md_file)
+    assert len(links) == 1
+    assert links[0]["name"] == "Python Docs"
+    assert links[0]["url"] == "https://docs.python.org"
+    assert links[0]["description"] == "Official Docs"
+    assert links[0]["type"] == "link"
+
+
+def test_extract_images_and_links(tmp_path):
+    md_content = """
+    ![Image](https://example.com/image.png)
+    [Link](https://example.com/link)
+    """
+    md_file = tmp_path / "images.md"
+    md_file.write_text(md_content, encoding="utf-8")
+
+    links = extractor.extract_links_from_file(md_file)
+    assert len(links) == 2
+    image_link = [l for l in links if l["type"] == "image"][0]
+    hyperlink = [l for l in links if l["type"] == "link"][0]
+    assert image_link["name"] == "Image"
+    assert image_link["url"] == "https://example.com/image.png"
+    assert hyperlink["name"] == "Link"
+    assert hyperlink["url"] == "https://example.com/link"
+
+
+def test_extract_relative_links(tmp_path):
+    md_content = """
+    [Local](./local.md)
+    [Root](/root.md)
+    [Anchor](#anchor)
+    """
+    md_file = tmp_path / "relative.md"
+    md_file.write_text(md_content, encoding="utf-8")
+
+    links = extractor.extract_links_from_file(md_file)
+    urls = [l["url"] for l in links]
+    assert "./local.md" in urls
+    assert "/root.md" in urls
+    assert "#anchor" in urls
+    assert len(links) == 3

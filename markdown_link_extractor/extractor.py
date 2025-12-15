@@ -4,9 +4,13 @@ from pathlib import Path
 from typing import List, Dict, Optional
 
 # Regex patterns for Markdown links
-MD_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
-INLINE_LINK_PATTERN = re.compile(r'<(https?://[^>]+)>')
-BARE_URL_PATTERN = re.compile(r'(?<!\()(?<!<)(https?://[^\s)>\]]+)')  # bare URLs not in ()
+URL_SCHEMA = r'(?:[a-zA-Z][a-zA-Z0-9+]*://|[./]+/?|#)'  # schemes like https://, ftp://, relative ./, /, #anchor
+URL_SCHEMA_PROTOCOL = r'[a-zA-Z][a-zA-Z0-9+]*://'  # only protocols for bare URLs to avoid partial matches
+MD_INLINE_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\((' + URL_SCHEMA + r'[^"\s]*)(?:\s*"([^"]*)")?\)')  # [name](url) or [name](url "title")
+MD_REF_LINK_PATTERN = re.compile(r'\[([^\]]+)\](?:\s*\[([^\]]*)\])?')  # [text] or [text][ref]
+REF_DEF_PATTERN = re.compile(r'^[ \t]*\[([^\]]+)\]:\s*([^ \t\n]+)(?:\s*"([^"]*)")?')  # [ref]: url or [ref]: url "title"
+INLINE_LINK_PATTERN = re.compile(r'<(' + URL_SCHEMA + r'[^>\s]+)>')  # <url> with any scheme
+BARE_URL_PATTERN = re.compile(r'(?<![\w(\<\>)])(' + URL_SCHEMA_PROTOCOL + r'[^\s)>\]]*)')  # bare URLs with protocols, not after word
 
 # Strings or patterns to ignore in URLs or names
 IGNORE_PATTERNS = ["@attachment"]
@@ -20,37 +24,101 @@ def should_ignore_link(name: str, url: str) -> bool:
 
 def extract_links_from_text(text: str) -> List[Dict[str, Optional[str]]]:
     """
-    Extract Markdown-style, inline <URL>, and bare URLs from text.
+    Extract Markdown-style hyperlinks, images, inline <URL>, and bare URLs from text.
     Filters out links containing ignore patterns.
     """
     links = []
 
-    # Standard Markdown links [name](url)
-    for match in MD_LINK_PATTERN.finditer(text):
-        name, url = match.groups()
-        if should_ignore_link(name, url):
-            continue
-        line = text[match.end():].split('\n', 1)[0].strip()
-        description = None
-        if line and not line.startswith('['):
-            description = line.split('.')[0]
-        links.append({'name': name.strip(), 'url': url.strip(), 'description': description})
+    # First pass: collect reference definitions
+    ref_defs = {}
+    for line in text.splitlines():
+        match = REF_DEF_PATTERN.match(line)
+        if match:
+            ref, url, title = match.groups()
+            ref_defs[ref] = {'url': url.strip(), 'title': (title or "").strip() or None}
 
-    # Inline angle-bracket links <https://example.com>
+    # Now extract all link types
+    lines = text.splitlines()
+
+    # Pattern for inline links and images: ([name](url "title") or ![alt](url)
+    INLINE_PATTERN = re.compile(r'(!?)\[([^\]]*)\]\((' + URL_SCHEMA + r'[^"\s]*)(?:\s*"([^"]*)")?\)')
+    # For reference links: [text] or [text][ref]
+    REF_PATTERN = re.compile(r'(!?)\[([^\]]*)\](?:\s*\[([^\]]*)\])?')
+
+    all_matches = []  # list of (start, end, type, groups)
+
+    # Find all inline/link matches
+    for match in INLINE_PATTERN.finditer(text):
+        is_image, name, url, title = match.groups()
+        start = match.start()
+        all_matches.append((start, match.end(), 'inline', (is_image, name, url, title)))
+
+    # Find all ref link matches, but exclude those inside inline if already matched
+    inline_ranges = {(s,e) for s,e,t,g in all_matches if t=='inline'}
+    for match in REF_PATTERN.finditer(text):
+        start = match.start()
+        end = match.end()
+        if any(start >= s and end <= e for s,e in inline_ranges):
+            continue  # already captured as inline
+        if end < len(text) and text[end] == ':':
+            continue  # likely a reference definition, skip
+        is_image, text_part, ref = match.groups()
+        all_matches.append((start, end, 'ref', (is_image, text_part, ref)))
+
+    # Sort by start position
+    all_matches.sort()
+
+    for start, end, link_type, groups in all_matches:
+        if link_type == 'inline':
+            is_image, name, url, title = groups
+            name = name or ""  # for images, alt text can be empty
+            url = url.strip()
+            if should_ignore_link(name, url):
+                continue
+            # Determine description from following text if no title
+            following_lines = text[end:].split('\n', 2)
+            description = title  # prefer title over following
+            if not description and len(following_lines) > 0:
+                line = following_lines[0].strip()
+                if line and not line.startswith('['):
+                    description = line.split('.')[0].strip()
+            links.append({'name': name.strip(), 'url': url, 'description': description, 'type': 'image' if is_image else 'link'})
+        elif link_type == 'ref':
+            is_image, text_part, ref = groups
+            ref = ref or text_part  # default ref to text if not specified
+            def_info = ref_defs.get(ref)
+            if not def_info:
+                continue  # no definition found, skip
+            url = def_info['url']
+            title = def_info.get('title')
+            if should_ignore_link(text_part, url):
+                continue
+            description = title  # use title from def
+            if not description:
+                following_lines = text[end:].split('\n', 2)
+                if len(following_lines) > 0:
+                    line = following_lines[0].strip()
+                    if line and not line.startswith('['):
+                        description = line.split('.')[0].strip()
+            links.append({'name': text_part.strip(), 'url': url, 'description': description, 'type': 'image' if is_image else 'link'})
+
+    # Inline angle-bracket links <url>
     for match in INLINE_LINK_PATTERN.finditer(text):
-        url = match.group(1)
+        url = match.group(1).strip()
         if should_ignore_link(url, url):
             continue
-        links.append({'name': url, 'url': url, 'description': None})
-
-    # Bare URLs (https://example.com)
-    for match in BARE_URL_PATTERN.finditer(text):
-        url = match.group(1)
-        if should_ignore_link(url, url):
-            continue
-        # Avoid duplicates if already captured
+        # Avoid duplicates
         if not any(l["url"] == url for l in links):
-            links.append({'name': url, 'url': url, 'description': None})
+            links.append({'name': url, 'url': url, 'description': None, 'type': 'link'})
+
+    # Bare URLs
+    for match in BARE_URL_PATTERN.finditer(text):
+        url = match.group(1).strip()
+        if should_ignore_link(url, url):
+            continue
+        # Avoid duplicates
+        if not any(l["url"] == url for l in links):
+            links.append({'name': url, 'url': url, 'description': None, 'type': 'link'})
 
     return links
 
