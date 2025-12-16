@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional
 from dataclasses import dataclass, field
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 
 @dataclass
@@ -43,7 +43,13 @@ class MarkdownLinkExtractor:
         r'^\.\.?/',
         r'^file://',
         r'^[a-zA-Z]:\\',  # Windows absolute paths
-        r'^\/',  # Absolute Unix paths
+        r'^\/', # Absolute Unix paths 
+        r'^\@',
+        r'^\#',
+        r'DONE',
+        r'done',
+        r'Done',
+        r'.*\.(PNG|png|JPG|jpg|JPEG|jpeg|GIF|gif|PDF|pdf|DOCX?|docx?|XLSX?|xlsx?|MD|md)$', # Common file extensions    ]
     ]
     
     def __init__(self):
@@ -53,11 +59,9 @@ class MarkdownLinkExtractor:
     def is_attachment_link(self, url: str) -> bool:
         """Check if a URL is an attachment link that should be ignored"""
         url = url.strip()
-        
-        # Check for @attachment in the URL
-        if '@attachment' in url.lower():
+        print(f"Checking if URL is attachment link: {url}")
+        if url.startswith(('202', 'POSTPONED', 'CANCELLED')):    
             return True
-        
         # Check against patterns
         for pattern in self.attachment_patterns:
             if pattern.match(url):
@@ -242,9 +246,16 @@ class MarkdownLinkExtractor:
             f.write("---\n\n")
             
             for url, url_links in link_groups.items():
-                # Create a readable link name from URL
-                link_name = self._generate_link_name(url)
-                f.write(f"## [{link_name}]({url})\n\n")
+                # Use the most common link text as the heading, or URL if no text available
+                link_texts = [link.link_text for link in url_links if link.link_text and link.link_text != url]
+                if link_texts:
+                    # Use the most frequent link text
+                    most_common_text = Counter(link_texts).most_common(1)[0][0]
+                    heading_text = most_common_text
+                else:
+                    heading_text = url
+                
+                f.write(f"## [{heading_text}]({url})\n\n")
                 f.write(f"**URL:** `{url}`\n\n")
                 f.write(f"**Found in {len(url_links)} location(s):**\n\n")
                 
@@ -261,22 +272,6 @@ class MarkdownLinkExtractor:
                 f.write("---\n\n")
         
         print(f"Output written to {output_file}")
-    
-    def _generate_link_name(self, url: str) -> str:
-        """Generate a readable name from URL"""
-        # Remove protocol and common prefixes
-        url_clean = re.sub(r'^https?://', '', url)
-        url_clean = re.sub(r'^www\.', '', url_clean)
-        
-        # Take the first part before any path
-        parts = url_clean.split('/')
-        domain = parts[0]
-        
-        # Capitalize domain for readability
-        domain_parts = domain.split('.')
-        main_domain = domain_parts[0].capitalize()
-        
-        return main_domain
 
 
 def main():
