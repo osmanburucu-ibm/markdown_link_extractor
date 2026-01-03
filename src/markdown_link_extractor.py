@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional
 from dataclasses import dataclass, field
 from collections import defaultdict, Counter
-
+import requests
 
 @dataclass
 class LinkInfo:
@@ -56,6 +56,17 @@ class MarkdownLinkExtractor:
         self.links: List[LinkInfo] = []
         self.attachment_patterns = [re.compile(pattern) for pattern in self.ATTACHMENT_PATTERNS]
     
+    def is_valid_url(self, url: str) -> bool:
+        """Check if a URL is valid (starts with http, https)"""
+        url = url.strip()
+        return url.startswith(('http://', 'https://'))
+    def is_active_url(self, url: str) -> bool:
+        try:
+            response = requests.head(url, timeout=5)
+            return response.status_code < 400  # Consider other status codes as needed
+        except requests.exceptions.RequestException or requests.ConnectionError:
+            return False
+        
     def is_attachment_link(self, url: str) -> bool:
         """Check if a URL is an attachment link that should be ignored"""
         url = url.strip()
